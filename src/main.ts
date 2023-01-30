@@ -13,5 +13,3 @@ async function bootstrap() {
 }
 bootstrap();
 
-
-// video progress - 19 Autotransform Payloads to DTO instances
