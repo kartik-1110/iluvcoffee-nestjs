@@ -1,7 +1,8 @@
 import { HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto/pagination-query.dto';
-import { Repository } from 'typeorm';
+import { Event } from 'src/events/entities/event.entity/event.entity';
+import { Connection, Repository } from 'typeorm';
 import { CreateCoffeeDto } from './dto/create-coffee.dto';
 import { Coffee } from './entities/coffee.entity';
 import { Flavor } from './entities/flavor.entity/flavor.entity';
@@ -12,13 +13,14 @@ export class CoffeesService {
         @InjectRepository(Coffee)
         private readonly coffeeRepository: Repository<Coffee>,
         @InjectRepository(Flavor)
-        private readonly flavorRepository: Repository<Flavor>
+        private readonly flavorRepository: Repository<Flavor>,
+        private readonly connection: Connection
     ) { }
 
     /* find all coffees */
     findAll(paginationQuery: PaginationQueryDto) {
-        const {limit, offset} = paginationQuery
-        
+        const { limit, offset } = paginationQuery
+
         return this.coffeeRepository.find({
             relations: ['flavors'],
             skip: offset,
@@ -53,8 +55,8 @@ export class CoffeesService {
 
     /* update an existing coffee */
     async update(id: string, updateCoffeeDto: any) {
-        const flavors = updateCoffeeDto.flavors && 
-        (await Promise.all(updateCoffeeDto.flavors.map(name => this.preloadFlavorByName(name))))
+        const flavors = updateCoffeeDto.flavors &&
+            (await Promise.all(updateCoffeeDto.flavors.map(name => this.preloadFlavorByName(name))))
 
         const coffee = await this.coffeeRepository.preload({
             id: +id,
@@ -73,9 +75,36 @@ export class CoffeesService {
         return this.coffeeRepository.remove(coffee)
     }
 
+    /* a coffee recommendation endpoint using transactions */
+    async recommendCoffee(coffee: Coffee) {
+        const queryRunner = this.connection.createQueryRunner()
+
+        await queryRunner.connect()
+        await queryRunner.startTransaction()
+
+        try {
+            coffee.recommendations++
+
+            const recommendEvent = new Event()
+            recommendEvent.name = 'recommend_coffee'
+            recommendEvent.type = 'coffee'
+            recommendEvent.payload = { coffeeId: coffee.id }
+
+            await queryRunner.manager.save(coffee)
+            await queryRunner.manager.save(recommendEvent)
+
+            await queryRunner.commitTransaction()
+
+        } catch (error) {
+            await queryRunner.rollbackTransaction()
+        } finally {
+            await queryRunner.release()
+        }
+    }
+
     /* this function checks if the flavor exists in the table, if it does not exist it creates a new entry in flavor table */
     private async preloadFlavorByName(name: string): Promise<Flavor> {
-        const existingFlavor = await this.flavorRepository.findOne({ where:{name} })
+        const existingFlavor = await this.flavorRepository.findOne({ where: { name } })
         if (existingFlavor) {
             return existingFlavor
         }
